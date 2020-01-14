@@ -5,31 +5,35 @@ namespace BrickyEditor {
             public title: string;
             public placeholder: string;
             public value: any;
-            
-            protected _$control : JQuery;
-            protected $input : JQuery;            
+
+            protected _$control: JQuery;
+            protected $input: JQuery;
 
             constructor(key: string, title: string, value: any, placeholder?: string) {
                 this.key = key;
                 this.title = title;
                 this.placeholder = placeholder || '';
                 this.value = value;
-            }  
+            }
 
-            public parseValue() {                                
-                this.value = this.$input.val();
+            public parseValue() {
+                if(this.$input) {
+                    this.value = this.$input.val();
+                }
                 this.$control = null
                 delete this._$control;
             }
 
-            public get $control() : JQuery {
-                if(!this._$control) {
-                    this._$control = 
-                    $(`<div class="bre-prompt-field">
+            public get $control(): JQuery {
+                if (!this._$control) {
+                    this._$control =
+                        $(`<div class=${this.key ? "bre-prompt-field" : "bre-prompt-subtitle"}>
                             <label class="bre-label" for="${this.key}">${this.title ? this.title : 'Select file...'}</label>
                         </div>`);
-                    this.$input = this.getEditor();
-                    this._$control.append(this.$input);
+                    this.$input = this.key ? this.getEditor() : null;
+                    if(this.$input != null) {
+                        this._$control.append(this.$input);
+                    }
                 }
 
                 return this._$control;
@@ -42,7 +46,7 @@ namespace BrickyEditor {
 
             public set $control(value: JQuery) {
                 this._$control = value;
-            }               
-        }        
+            }
+        }
     }
 }

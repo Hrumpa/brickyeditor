@@ -3,187 +3,189 @@
 
 namespace BrickyEditor {
     export class Editor {
-        public ui: UI;
-        public blocks: Array<Block> = [];
-        public selectedBlock: Block;
-        public get selectedBlockIndex() {
-            if(this.selectedBlock) {
-                return this.blocks.indexOf(this.selectedBlock);
-            }
-            return -1;
-        }
-        
-        private compactTools? : boolean = null;
+        private isLoaded: boolean;
+        private container: BlocksContainer;
+
+        public $editor: JQuery
+        public static UI: UI;        
+        public options: EditorOptions;
+
+        private onError = (message: string, code: number = 0) => this.options.onError({ message: message, code: code});
 
         constructor(
-            public $editor: JQuery, 
-            public options: EditorOptions) {
-            
-            $editor.addClass('bre-editor');
-
+            $editor: JQuery,
+            options: EditorOptions) {
             Fields.BaseField.registerCommonFields();
             
+            this.$editor = $editor;
+            this.$editor.addClass(Selectors.classEditor);            
             this.options = new EditorOptions(options);
-            this.ui = new UI(this);
+            this.container = this.createContainer();
+
+            Editor.UI = new UI(this);            
+        }
+
+        private createContainer(): BlocksContainer {
+            const onAdd = (block: Block, idx: number) => {
+                if(this.isLoaded) {
+                    this.trigger(Events.onBlockAdd, { block: block, idx: idx});
+                    this.trigger(Events.onChange, { blocks: this.getData(), html: this.getHtml() });
+                }
+            };
+
+            const onDelete = (block: Block, idx: number) => {
+                this.trigger(Events.onBlockDelete, { block: block, idx: idx});
+                this.trigger(Events.onChange, { blocks: this.getData(), html: this.getHtml() });
+            }
+
+            const onUpdate = (block, property, oldValue, newValue) => { 
+                this.trigger(Events.onBlockUpdate, {
+                    block : block, 
+                    property: property, 
+                    oldValue: oldValue, 
+                    newValue: newValue
+                });
+                this.trigger(Events.onChange, { blocks: this.getData(), html: this.getHtml() });
+            };
+
+            return new BlocksContainer(
+                this.$editor,
+                onAdd,
+                onDelete,
+                (block: Block) => { this.trigger(Events.onBlockSelect, { block: block }); },
+                (block: Block) => { this.trigger(Events.onBlockDeselect, { block: block }); },
+                (block: Block, from: number, to: number) => {
+                    this.trigger(Events.onBlockMove, { block: block, from: from, to: to });
+                    this.trigger(Events.onChange, { blocks: this.getData(), html: this.getHtml() });
+                },
+                onUpdate,
+                this.options.onUpload
+            );
+        }
+
+        public async initAsync() {
+            const editor = this;
 
             /// Load templates
-            this.ui.toggleToolsLoader(true);
-            Services
-                .TemplateService
-                .loadTemplatesAsync(this)
-                .done(templates => {
+            Editor.UI.toggleToolsLoader(true);
 
-                    this.ui.toggleToolsLoader(false);
-                    this.ui.setTemplates(templates);
+            const templates = await Services.TemplateService.loadTemplatesAsync(
+                editor.options.templatesUrl, 
+                editor.$editor, 
+                editor.onError);
 
-                    // Load blocks into container
-                    if(this.options.blocks && this.options.blocks.length) {                
-                        this.loadBlocks(this.options.blocks);
-                    }
+            Editor.UI.toggleToolsLoader(false);
+            Editor.UI.setTemplates(templates);
 
-                    // Call onload handler if exists
-                    if(this.options.onload) {
-                        this.options.onload(this);
-                    }
-                });
-
-            //todo: future feature
-            //this.setupHotkeys();
+            // Load initial blocks
+            const blocks = await this.tryLoadInitialBlocksAsync();
+            this.loadBlocks(blocks)
+            
+            // Trigger jQuery event
+            this.isLoaded = true;
+            this.trigger(Events.onLoad, this);
         }
 
-        // todo: move to constants
-        // keyUp: number = 38;
-        // keyDown: number = 40;
-        // keyDelete: number = 46;
-        // keyBackspace: number = 8;
-
-        // private setupHotkeys() {
-        //     document.onkeydown = (ev: KeyboardEvent) => {         
-        //         if((ev.metaKey || ev.ctrlKey) && this.selectedBlock) {
-        //             let prevent = false;
-        //             if(ev.keyCode === this.keyUp) {
-        //                 this.moveBlock(this.selectedBlock, -1);
-        //                 prevent = true;
-        //             }
-        //             else if(ev.keyCode === this.keyDown) {
-        //                 this.moveBlock(this.selectedBlock, 1);
-        //                 prevent = true;
-        //             }
-        //             else if(ev.keyCode === this.keyDelete ||
-        //                 ev.keyCode === this.keyBackspace) {
-        //                 this.deleteBlock(this.selectedBlock);
-        //             }
-
-        //             if(prevent) {
-        //                 ev.preventDefault();
-        //                 return false;
-        //             }
-        //         }
-        //     };
-        // }
-
-        public getData() : any {
-            var blocksData = [];            
-            this.blocks.forEach(block => {
-                blocksData.push(block.getData());
+        // load initial blocks
+        private async tryLoadInitialBlocksAsync(): Promise<Block[]> {
+            const url = this.options.blocksUrl;
+            const editor = this;
+            return new Promise<Block[]>(async (resolve, reject) => {
+                if(url) {
+                    try {
+                        const blocks = await $.get(url);
+                        resolve(blocks);
+                    } catch (error) {    
+                        editor.onError(EditorStrings.errorBlocksFileNotFound(url));
+                        reject(error);
+                    }
+                }
+                else if(this.options.blocks) {
+                    resolve(this.options.blocks);
+                }
+                else {
+                    resolve(null);
+                }
             });
-            return blocksData;
         }
 
-        public getHtml() : string {
-            var blocksData = [];
-            this.blocks.forEach(block => {
-                blocksData.push(block.getHtml(true));
+        tryBindFormSubmit() {
+            const editor = this;
+            const $form = this.options.formSelector ? $(this.options.formSelector) : null;
+            const $input = this.options.inputSelector ? $(this.options.inputSelector) : null;
+
+            if (!$form || !$input || $form.length == 0 || $input.length == 0)
+                return;
+
+            $form.on('submit', () => {
+                $input.val(JSON.stringify(editor.getData()));
+                return true;
             });
-            return blocksData.join('\n');
+        }
+
+        bindFormSubmit() {
+            const editor = this;
+            const $form = this.options.formSelector ? $(this.options.formSelector) : null;
+            const $input = this.options.inputSelector ? $(this.options.inputSelector) : null;
+
+            if(!$form || !$input || $form.length == 0 || $input.length == 0)
+                return;
+
+            $form.on('submit', () => {
+                $input.val(JSON.stringify(editor.getData()));
+                return true;
+            });
+        }
+
+        public getData(): any {
+            return this.container.getData(this.options.ignoreHtml);
+        }
+
+        public getHtml(): string {
+            return this.container.getHtml();
         }
 
         /// BLOCKS
-
         public loadBlocks(blocks: Array<any>) {
-            if(blocks && blocks.length) {
+            if (blocks && blocks.length) {
                 blocks.forEach(block => {
                     let template = Services.TemplateService.getTemplate(block.template);
-                    if(template) {
-                        this.addBlock(template, block.fields, null, false);
+                    if (template) {
+                        this.container.addBlock(template, block.fields, null, false);
                     }
                     else {
-                        console.log(`Template ${block.template} not found.`);
+                        const message = EditorStrings.errorBlockTemplateNotFound(block.template);
+                        this.onError(message);
                     }
                 });
             }
         }
 
-        public selectBlock(block: Block) {
-            if(this.selectedBlock === block)
-                return;
-
-            if(this.selectedBlock) {
-                this.selectedBlock.deselect();
-            }
-
-            this.selectedBlock = block;
+        public addBlock(template: Template) {
+            const container = this.getContainer(this.container);
+            container.addBlock(template, null, null, true);
         }
 
-        public deselectBlock(block: Block) {
-            this.selectedBlock = null;            
+        private getContainer(container: BlocksContainer) {
+            if(container.selectedBlock && container.selectedBlock.isContainer()) {
+                const field = container.selectedBlock.selectedField as Fields.ContainerField;
+                if(field) {
+                    return this.getContainer(field.container);
+                }                
+            }
+            return container;
         }
 
-        public addBlock(
-            template: Template, 
-            data? : Array<Fields.BaseField>, 
-            idx? : number, 
-            select: boolean = true) {
+        private trigger(event: string, data: any) {
+            const editor = this;
+            const $editor = this.$editor;
 
-            let block = new Block(this, template, data);
-            block.insert(idx);
-
-            if(select) {
-                block.select();
-                block.scrollTo();
-            }
-        }
-
-        public deleteBlock(block: Block) {
-            let idx = this.blocks.indexOf(block);
-            this.blocks.splice(idx, 1);
-            block = null;
-            
-            if(idx < this.blocks.length) {
-                this.blocks[idx].select();
-            }
-            else if (this.blocks.length > 0) {
-                this.blocks[idx - 1].select();
-            }
-            else {
-                this.selectedBlock = null;
-            }
-        }
-
-        public moveBlock(block: Block, offset: number) {
-            let idx = this.blocks.indexOf(block);
-            let new_idx = idx + offset;
-
-            if (new_idx >= this.blocks.length || new_idx < 0)
-                return;
-
-            var $anchorBlock = this.blocks[new_idx].ui.$editor;
-            if(offset > 0) {
-                $anchorBlock.after(block.ui.$editor);
-            }
-            else if (offset < 0) {
-                $anchorBlock.before(block.ui.$editor);
-            }
-
-            this.blocks.splice(idx, 1);
-            this.blocks.splice(new_idx, 0, block);
-
-            block.scrollTo();
-        }
-
-        public copyBlock(block: Block) {
-            let idx = this.blocks.indexOf(block) + 1;
-            let copy = this.addBlock(block.template, block.getData().fields, idx, true);
+            $editor.trigger('bre.' + event, data);
+            Common.propsEach(editor.options, (key, value) => {
+                if(key.breEqualsInvariant(event) && value) {
+                    value(data);
+                }
+            });
         }
     }
 }
